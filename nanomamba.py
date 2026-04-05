@@ -4490,6 +4490,89 @@ class DilatedTCNBlock(nn.Module):
         return out
 
 
+class BiDilatedTCNBlock(nn.Module):
+    """Bidirectional dilated Conv1D block with gating.
+
+    Same structure as DilatedTCNBlock but with forward + backward paths:
+        LayerNorm -> in_proj -> split [x_branch, z_gate]
+        -> Forward DWConv (causal, left-pad) -> SiLU -> y_fwd
+        -> Backward DWConv (anti-causal, right-pad) -> SiLU -> y_bwd
+        -> Fusion: y = (y_fwd + y_bwd) * SiLU(z)
+        -> out_proj + Residual
+
+    For SLU (offline intent classification), bidirectional is valid at inference
+    since the full utterance is available before classification.
+
+    Key insight from NC-SSM Vision demo: bidirectional context propagation
+    enables clean-frame information to reach degraded frames from both directions,
+    improving robustness. For SLU, this means phoneme context from both
+    preceding and following speech helps disambiguate intent.
+
+    Parameter overhead: only +1 dwconv per block (~d_inner * d_conv params).
+    With d_inner=55, d_conv=3: +165 params per block, +495 total for 3 blocks.
+    NC-TCN-20K-Bi: ~22,184 params (vs 21,689 unidirectional).
+    """
+
+    def __init__(self, d_model, d_conv=3, expand=1.5, dilation=1):
+        super().__init__()
+        self.d_model = d_model
+        self.d_inner = int(d_model * expand)
+        self.dilation = dilation
+
+        self.norm = nn.LayerNorm(d_model)
+
+        # Input projection: (d_model) -> (2 * d_inner) for [x_branch, z_gate]
+        self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=False)
+
+        # Forward (causal): left-pad
+        self.causal_pad = (d_conv - 1) * dilation
+        self.dwconv_fwd = nn.Conv1d(
+            self.d_inner, self.d_inner,
+            kernel_size=d_conv, dilation=dilation,
+            padding=0, groups=self.d_inner)
+
+        # Backward (anti-causal): right-pad
+        self.dwconv_bwd = nn.Conv1d(
+            self.d_inner, self.d_inner,
+            kernel_size=d_conv, dilation=dilation,
+            padding=0, groups=self.d_inner)
+
+        # Output projection (shared for both directions)
+        self.out_proj = nn.Linear(self.d_inner, d_model, bias=False)
+
+    def forward(self, x, snr_mel=None, pcen_gate=None, snr_hint=None):
+        """
+        Args:
+            x: (B, L, d_model) - input sequence
+        Returns:
+            out: (B, L, d_model) - bidirectional output with residual
+        """
+        residual = x
+        x = self.norm(x)
+
+        # Project and split
+        xz = self.in_proj(x)  # (B, L, 2*d_inner)
+        x_branch, z = xz.chunk(2, dim=-1)
+        x_t = x_branch.transpose(1, 2)  # (B, d_inner, L)
+
+        # Forward path (causal: left-pad)
+        x_fwd = F.pad(x_t, (self.causal_pad, 0))
+        x_fwd = F.silu(self.dwconv_fwd(x_fwd))  # (B, d_inner, L)
+
+        # Backward path (anti-causal: right-pad)
+        x_bwd = F.pad(x_t, (0, self.causal_pad))
+        x_bwd = F.silu(self.dwconv_bwd(x_bwd))  # (B, d_inner, L)
+
+        # Fusion: average forward + backward, then gate
+        y = ((x_fwd + x_bwd) * 0.5).transpose(1, 2)  # (B, L, d_inner)
+        y = y * F.silu(z)
+
+        # Output projection + residual
+        out = self.out_proj(y) + residual
+        out = torch.nan_to_num(out, nan=0.0, posinf=1e4, neginf=-1e4)
+        return out
+
+
 class NanoTCN(nn.Module):
     """NC-TCN: Noise-Conditional Temporal Convolutional Network.
 
@@ -4513,7 +4596,8 @@ class NanoTCN(nn.Module):
                  sr=16000, n_fft=512, hop_length=160,
                  use_dual_pcen_v2=True, use_lsg=True,
                  use_ss_bypass=False,
-                 use_learned_ss=False):
+                 use_learned_ss=False,
+                 bidirectional=False):
         super().__init__()
         self.n_mels = n_mels
         self.n_fft = n_fft
@@ -4524,6 +4608,7 @@ class NanoTCN(nn.Module):
         self.use_lsg = use_lsg
         self.use_ss_bypass = use_ss_bypass
         self.use_learned_ss = use_learned_ss
+        self.bidirectional = bidirectional
 
         n_freq = n_fft // 2 + 1
 
@@ -4569,8 +4654,9 @@ class NanoTCN(nn.Module):
         if dilations is None:
             # Default: exponential dilation 1,2,4,... covers 100 frames
             dilations = [2**i for i in range(n_layers)]
+        BlockClass = BiDilatedTCNBlock if bidirectional else DilatedTCNBlock
         self.blocks = nn.ModuleList([
-            DilatedTCNBlock(
+            BlockClass(
                 d_model=d_model, d_conv=d_conv,
                 expand=expand, dilation=d)
             for d in dilations
@@ -4728,6 +4814,30 @@ def create_nc_tcn_matched(n_classes=12):
         d_model=20, d_conv=3, expand=1.5,
         n_layers=2, dilations=[1, 2],
         use_dual_pcen_v2=True, use_lsg=True)
+
+
+def create_nc_tcn_20k_bi(n_classes=12):
+    """NC-TCN-20K-Bi: Bidirectional NC-TCN-20K for offline SLU.
+
+    Same as NC-TCN-20K but uses BiDilatedTCNBlock instead of DilatedTCNBlock.
+    Each block has forward (causal) + backward (anti-causal) depthwise conv,
+    fused before gating. Suitable for offline tasks (SLU, intent classification)
+    where full utterance is available at inference time.
+
+    Parameter overhead: +495 params (3 blocks x 165 params/block for extra dwconv)
+    Total: ~22,184 params (~87KB float32, ~22KB INT8)
+
+    Bidirectional advantages for SLU:
+      - Captures both preceding and following phoneme context
+      - "turn on" vs "turn off" disambiguation benefits from future context
+      - Full utterance context for compositional intent understanding
+    """
+    return NanoTCN(
+        n_mels=40, n_classes=n_classes,
+        d_model=37, d_conv=3, expand=1.5,
+        n_layers=3, dilations=[1, 2, 4],
+        use_dual_pcen_v2=True, use_lsg=True,
+        bidirectional=True)
 
 
 def create_nc_tcn_tiny(n_classes=12):
