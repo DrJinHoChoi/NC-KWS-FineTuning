@@ -2998,6 +2998,144 @@ class LearnableSpectralEnhancer(nn.Module):
 
 
 # ============================================================================
+# Bidirectional NanoMamba Block (for offline SLU)
+# ============================================================================
+
+class BiNanoMambaBlock(nn.Module):
+    """Bidirectional NanoMamba block: forward + backward SSM scan with fusion.
+
+    For offline SLU (intent classification), the full utterance is available
+    before inference, so bidirectional processing is valid. This enables
+    clean-frame context to propagate from both directions, improving
+    robustness for noisy or ambiguous segments.
+
+    Architecture:
+        LayerNorm → in_proj → split [x_branch, z_gate]
+        → DWConv_fwd (causal) → SSM_fwd (forward scan) → y_fwd
+        → DWConv_bwd (reverse) → SSM_bwd (backward scan) → y_bwd
+        → Fusion: (y_fwd + y_bwd) * 0.5 * SiLU(z)
+        → out_proj + Residual
+
+    Extra params vs NanoMambaBlock: +1 DWConv + 1 SSM module per block.
+    With d_inner=55, d_state=10: ~+5K params per block.
+    """
+
+    def __init__(self, d_model, d_state=4, d_conv=3, expand=1.5, n_mels=40,
+                 ssm_mode='full', use_ssm_v2=False, use_sm_ssm=False,
+                 use_nc_ssm=False, **kwargs):
+        super().__init__()
+        self.d_model = d_model
+        self.d_inner = int(d_model * expand)
+        self.use_ssm_v2 = use_ssm_v2
+        self.use_sm_ssm = use_sm_ssm
+        self.use_nc_ssm = use_nc_ssm
+
+        self.norm = nn.LayerNorm(d_model)
+
+        # Input projection: shared for both directions
+        self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=False)
+
+        # Forward depthwise conv (causal: left-pad)
+        self.conv1d_fwd = nn.Conv1d(
+            self.d_inner, self.d_inner,
+            kernel_size=d_conv, padding=d_conv - 1,
+            groups=self.d_inner)
+
+        # Backward depthwise conv (anti-causal: separate weights)
+        self.conv1d_bwd = nn.Conv1d(
+            self.d_inner, self.d_inner,
+            kernel_size=d_conv, padding=d_conv - 1,
+            groups=self.d_inner)
+
+        # SSM variant selection (same logic as NanoMambaBlock)
+        if use_nc_ssm:
+            SSMClass = NoiseCondSMSSM
+        elif use_sm_ssm:
+            SSMClass = SelectivityModulatedSSM
+        elif use_ssm_v2:
+            SSMClass = SpectralAwareSSM_v2
+        else:
+            SSMClass = SpectralAwareSSM
+        ssm_kwargs = dict(d_inner=self.d_inner, d_state=d_state,
+                          n_mels=n_mels, mode=ssm_mode)
+        if use_nc_ssm and hasattr(SSMClass.__init__, '__code__'):
+            for k in ('use_param_decouple', 'use_nasg'):
+                if k in kwargs:
+                    ssm_kwargs[k] = kwargs[k]
+
+        # Forward and backward SSM (separate parameters)
+        self.sa_ssm_fwd = SSMClass(**ssm_kwargs)
+        self.sa_ssm_bwd = SSMClass(**ssm_kwargs)
+
+        # Output projection: shared
+        self.out_proj = nn.Linear(self.d_inner, d_model, bias=False)
+
+    def _run_ssm(self, ssm, x_branch, snr_mel, pcen_gate=None, snr_hint=None):
+        """Run one SSM direction with proper kwargs."""
+        if self.use_nc_ssm:
+            if pcen_gate is not None:
+                return ssm(x_branch, snr_mel, pcen_gate=pcen_gate, snr_hint=snr_hint)
+            else:
+                return ssm(x_branch, snr_mel, snr_hint=snr_hint)
+        elif (self.use_ssm_v2 or self.use_sm_ssm) and pcen_gate is not None:
+            return ssm(x_branch, snr_mel, pcen_gate=pcen_gate)
+        else:
+            return ssm(x_branch, snr_mel)
+
+    def forward(self, x, snr_mel, pcen_gate=None, snr_hint=None):
+        """
+        Args:
+            x: (B, L, d_model)
+            snr_mel: (B, L, n_mels)
+            pcen_gate: (B, L) optional
+            snr_hint: (B, L, 1) optional
+        Returns:
+            out: (B, L, d_model)
+        """
+        residual = x
+        x = self.norm(x)
+        L = x.size(1)
+
+        # Project and split
+        xz = self.in_proj(x)  # (B, L, 2*d_inner)
+        x_branch, z = xz.chunk(2, dim=-1)
+
+        # === Forward direction ===
+        x_fwd = x_branch.transpose(1, 2)  # (B, d_inner, L)
+        x_fwd = self.conv1d_fwd(x_fwd)[:, :, :L]
+        x_fwd = x_fwd.transpose(1, 2)  # (B, L, d_inner)
+        x_fwd = F.silu(x_fwd)
+        y_fwd = self._run_ssm(self.sa_ssm_fwd, x_fwd, snr_mel,
+                               pcen_gate=pcen_gate, snr_hint=snr_hint)
+
+        # === Backward direction ===
+        # Flip sequence, run conv + SSM, flip back
+        x_bwd = x_branch.flip(1).transpose(1, 2)  # (B, d_inner, L) reversed
+        x_bwd = self.conv1d_bwd(x_bwd)[:, :, :L]
+        x_bwd = x_bwd.transpose(1, 2)  # (B, L, d_inner)
+        x_bwd = F.silu(x_bwd)
+        # Flip SNR and pcen_gate for backward scan
+        snr_bwd = snr_mel.flip(1)
+        pcen_bwd = pcen_gate.flip(0) if (pcen_gate is not None and pcen_gate.dim() == 1) else (
+            pcen_gate.flip(1) if pcen_gate is not None else None)
+        snr_hint_bwd = snr_hint.flip(1) if snr_hint is not None else None
+        y_bwd = self._run_ssm(self.sa_ssm_bwd, x_bwd, snr_bwd,
+                               pcen_gate=pcen_bwd, snr_hint=snr_hint_bwd)
+        y_bwd = y_bwd.flip(1)  # Flip back to original order
+
+        # === Fusion ===
+        y = (y_fwd + y_bwd) * 0.5
+
+        # Gate with z branch
+        y = y * F.silu(z)
+
+        # Output projection + residual
+        out = self.out_proj(y) + residual
+        out = torch.nan_to_num(out, nan=0.0, posinf=1e4, neginf=-1e4)
+        return out
+
+
+# ============================================================================
 # NanoMamba Block
 # ============================================================================
 
@@ -3146,9 +3284,13 @@ class NanoMamba(nn.Module):
                  use_nano_se=False,
                  use_nano_se_v3=False,
                  weight_sharing=False, n_repeats=3,
+                 bidirectional=False,
                  **ssm_kwargs):
         """
         Args:
+            bidirectional: if True, use BiNanoMambaBlock (forward+backward SSM)
+                instead of NanoMambaBlock. Valid for offline SLU inference
+                where the full utterance is available. Adds ~5K params/block.
             ssm_mode: SA-SSM ablation mode
                 'full'     - proposed (dt + B modulation)
                 'dt_only'  - only dt modulation
@@ -3245,6 +3387,7 @@ class NanoMamba(nn.Module):
         self.n_sub_bands = n_sub_bands
         self.d_sub = d_sub
         self.use_subband_ssm = use_subband_ssm
+        self.bidirectional = bidirectional
 
         # Mutual exclusion: waveform-domain vs magnitude-domain enhancer
         assert not (use_spectral_enhancer and use_learnable_enhancer), \
@@ -3342,36 +3485,22 @@ class NanoMamba(nn.Module):
             self.patch_proj = nn.Linear(n_mels, d_model)
 
         # 5. SA-SSM Blocks (v1, v2, SM-SSM, or NC-SSM)
+        BlockClass = BiNanoMambaBlock if bidirectional else NanoMambaBlock
         self.weight_sharing = weight_sharing
+        block_kwargs = dict(
+            d_model=d_model, d_state=d_state, d_conv=d_conv,
+            expand=expand, n_mels=n_mels, ssm_mode=ssm_mode,
+            use_ssm_v2=use_ssm_v2, use_sm_ssm=use_sm_ssm,
+            use_nc_ssm=use_nc_ssm, **self._ssm_kwargs)
         if weight_sharing:
             # Single shared block, repeated n_repeats times
             # Depth = n_repeats, unique params = 1 block
-            shared_block = NanoMambaBlock(
-                d_model=d_model,
-                d_state=d_state,
-                d_conv=d_conv,
-                expand=expand,
-                n_mels=n_mels,
-                ssm_mode=ssm_mode,
-                use_ssm_v2=use_ssm_v2,
-                use_sm_ssm=use_sm_ssm,
-                use_nc_ssm=use_nc_ssm,
-                **self._ssm_kwargs)
+            shared_block = BlockClass(**block_kwargs)
             self.blocks = nn.ModuleList([shared_block])
             self.n_repeats = n_repeats
         else:
             self.blocks = nn.ModuleList([
-                NanoMambaBlock(
-                    d_model=d_model,
-                    d_state=d_state,
-                    d_conv=d_conv,
-                    expand=expand,
-                    n_mels=n_mels,
-                    ssm_mode=ssm_mode,
-                    use_ssm_v2=use_ssm_v2,
-                    use_sm_ssm=use_sm_ssm,
-                    use_nc_ssm=use_nc_ssm,
-                    **self._ssm_kwargs)
+                BlockClass(**block_kwargs)
                 for _ in range(n_layers)
             ])
             self.n_repeats = n_layers
@@ -4409,11 +4538,33 @@ def create_nanomamba_nc_20k(n_classes=12):
         use_ssm_v2=True, use_nc_ssm=True, use_lsg=True)
 
 
+def create_nanomamba_nc_20k_bi(n_classes=12):
+    """NC-SSM-20K-Bi: Bidirectional NC-SSM-20K for offline SLU.
+
+    Same architecture as NC-SSM-20K but with BiNanoMambaBlock:
+    forward + backward SSM scans fused per block.
+
+    For offline inference (SLU intent classification), the full utterance
+    is available, so bidirectional context propagation is valid.
+    Clean-frame information flows from both directions, improving
+    robustness for noisy or ambiguous speech segments.
+
+    Extra params vs NC-SSM-20K: +1 DWConv + 1 SSM per block (×2 blocks).
+    NC-SSM-20K: ~20,044 params → NC-SSM-20K-Bi: ~30K params.
+    """
+    return NanoMamba(
+        n_mels=40, n_classes=n_classes,
+        d_model=37, d_state=10, d_conv=3, expand=1.5,
+        n_layers=2, use_dual_pcen_v2=True,
+        use_ssm_v2=True, use_nc_ssm=True, use_lsg=True,
+        bidirectional=True)
+
+
 # ============================================================================
 # NC-TCN: Noise-Conditional Temporal Convolutional Network
 # ============================================================================
 # Replaces SSM sequential scan with dilated causal Conv1D.
-# Same NC frontend (STFT → SNR → Mel → SpectralGate → DualPCEN → InstanceNorm)
+# Same NC frontend (STFT → SNR → Mel → SpectralGate → DualPCEN �� InstanceNorm)
 # but backend is fully parallelizable, INT8-friendly, SIMD-optimized.
 # ============================================================================
 
