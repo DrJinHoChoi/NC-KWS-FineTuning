@@ -1,0 +1,43 @@
+NC-KWS-FineTuning / NC-SLU License
+Copyright (c) 2026 Jin Ho Choi, NanoAgentic AI / SmartEar Inc.
+
+=== Research Use (Free) ===
+
+Permission is hereby granted, free of charge, to any person or organization
+obtaining a copy of this software and associated documentation files (the
+"Software"), to use, copy, modify, and distribute the Software for
+NON-COMMERCIAL RESEARCH AND EDUCATIONAL PURPOSES ONLY, subject to the
+following conditions:
+
+1. The above copyright notice and this permission notice shall be included
+   in all copies or substantial portions of the Software.
+
+2. Any publications or presentations using this Software must cite the
+   associated paper(s):
+   - NC-SLU: On-Device Spoken Language Understanding in Sub-100K Parameters
+     with Few-Shot Intent Addition (EMNLP 2026)
+
+3. The Software is provided "as is", without warranty of any kind.
+
+=== Commercial Use (License Required) ===
+
+Any commercial use of this Software, including but not limited to:
+  - Embedding in commercial products or services
+  - Use in production systems
+  - Offering as part of a paid service (SaaS, API, SDK, etc.)
+  - Use in proprietary hardware (MCUs, SoCs, edge devices)
+  - Sublicensing or redistribution for commercial purposes
+
+REQUIRES a separate commercial license agreement with NanoAgentic AI.
+
+Patent Notice:
+The methods implemented in this Software, including but not limited to
+NC-SSM (Noise-Conditioned Selective State Space Model), NC-OPAL (On-device
+Prototype Adaptive Learning), and the NC front-end architecture, are the
+subject of patent applications filed in the Republic of Korea and the
+United States of America. Commercial use without a license may constitute
+patent infringement.
+
+For commercial licensing inquiries:
+  Email: jhchoi@nanoagentic.ai
+  Web:   https://nanoagentic.ai
