@@ -3235,6 +3235,37 @@ class NanoMambaBlock(nn.Module):
 
 
 # ============================================================================
+# Temporal Attention Pooling
+# ============================================================================
+
+class TemporalAttentionPool(nn.Module):
+    """Learnable temporal attention pooling.
+
+    Replaces global average pooling with learned attention weights
+    that can emphasize discriminative prefix frames for confusable intents.
+    Adds only d_model + 1 parameters (37+1 = 38 params for NC-SSM-20K).
+    """
+    def __init__(self, d_model):
+        super().__init__()
+        self.attn = nn.Linear(d_model, 1, bias=True)
+
+    def forward(self, x):
+        """
+        Args:
+            x: (B, T, d_model)
+        Returns:
+            pooled: (B, d_model)
+            attn_weights: (B, T) for visualization
+        """
+        # Attention scores
+        scores = self.attn(x).squeeze(-1)  # (B, T)
+        attn_weights = torch.softmax(scores, dim=-1)  # (B, T)
+        # Weighted sum
+        pooled = (x * attn_weights.unsqueeze(-1)).sum(dim=1)  # (B, d_model)
+        return pooled, attn_weights
+
+
+# ============================================================================
 # NanoMamba Model
 # ============================================================================
 
@@ -3522,6 +3553,9 @@ class NanoMamba(nn.Module):
         # 6. Final norm
         self.final_norm = nn.LayerNorm(d_model)
 
+        # 6b. Temporal attention pooling
+        self.attn_pool = TemporalAttentionPool(d_model)
+
         # 7. Classifier
         self.classifier = nn.Linear(d_model, n_classes)
 
@@ -3789,9 +3823,9 @@ class NanoMamba(nn.Module):
         if self.use_subband_ssm:
             x = self.subband_block(x, snr, pcen_gate=pcen_gate)
 
-        # Final norm + global average pooling
+        # Final norm + temporal attention pooling
         x = self.final_norm(x)  # (B, T, d_model)
-        x = x.mean(dim=1)  # (B, d_model)
+        x, self._attn_weights = self.attn_pool(x)  # (B, d_model)
 
         # Classify
         return self.classifier(x)
