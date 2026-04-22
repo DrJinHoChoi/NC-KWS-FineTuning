@@ -16,6 +16,22 @@ Add custom wake words (e.g., "marvin", "sheila", "bed") to a pre-trained 12-clas
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/DrJinHoChoi/NC-KWS-FineTuning/blob/main/notebooks/kws_finetune_comparison.ipynb)
 
+## Reproducing the Paper
+
+**One-command reviewer script:**
+
+```bash
+python reproduce_ncopal.py                 # all 3 methods (lora, alora, opal)
+python reproduce_ncopal.py --method opal   # NC-OPAL only
+python reproduce_ncopal.py --n-train 30 --n-base 15 --n-test 100
+python reproduce_ncopal.py --data-dir /path/to/speech_commands_v0.02
+```
+
+Loads the shipped NC-TCN-20K backbone (`checkpoints/best.pt`), fine-tunes
+on 3 new keywords (`marvin`, `sheila`, `bed`) with few-shot samples per
+method, evaluates base / new / forgetting, and compares to paper numbers.
+Exit code `0` within `--tol` (default 3.0 %p); `1` otherwise.
+
 ## Structure
 
 ```
