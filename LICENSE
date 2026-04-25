@@ -1,43 +1,83 @@
-NC-KWS-FineTuning / NC-SLU License
-Copyright (c) 2026 Jin Ho Choi, NanoAgentic AI / SmartEar Inc.
+NC-KWS-FineTuning — Dual License: Academic (Non-Commercial) + Commercial
 
-=== Research Use (Free) ===
+Copyright (c) 2026 Jin Ho Choi, SmartEAR / NanoAgentic AI
 
-Permission is hereby granted, free of charge, to any person or organization
-obtaining a copy of this software and associated documentation files (the
-"Software"), to use, copy, modify, and distribute the Software for
-NON-COMMERCIAL RESEARCH AND EDUCATIONAL PURPOSES ONLY, subject to the
-following conditions:
+-------------------------------------------------------------------------------
+1. ACADEMIC / NON-COMMERCIAL LICENSE
+-------------------------------------------------------------------------------
 
-1. The above copyright notice and this permission notice shall be included
-   in all copies or substantial portions of the Software.
+Permission is hereby granted, free of charge, to any person or academic
+institution obtaining a copy of this software and associated documentation
+files (the "Software"), to use, copy, modify, and distribute the Software
+for ACADEMIC, EDUCATIONAL, OR NON-COMMERCIAL RESEARCH PURPOSES ONLY, subject
+to the following conditions:
 
-2. Any publications or presentations using this Software must cite the
-   associated paper(s):
-   - NC-SLU: On-Device Spoken Language Understanding in Sub-100K Parameters
-     with Few-Shot Intent Addition (EMNLP 2026)
+  (a) The above copyright notice and this permission notice shall be
+      included in all copies or substantial portions of the Software.
 
-3. The Software is provided "as is", without warranty of any kind.
+  (b) Any academic publication, preprint, thesis, or public presentation
+      that uses or derives from this Software shall cite the relevant
+      paper(s) listed in the repository README, when applicable.
 
-=== Commercial Use (License Required) ===
+  (c) Modifications must be clearly marked as such and must not be
+      misrepresented as the original Software.
 
-Any commercial use of this Software, including but not limited to:
-  - Embedding in commercial products or services
-  - Use in production systems
-  - Offering as part of a paid service (SaaS, API, SDK, etc.)
-  - Use in proprietary hardware (MCUs, SoCs, edge devices)
-  - Sublicensing or redistribution for commercial purposes
+"Non-commercial" means any use that is not intended for or directed toward
+commercial advantage or monetary compensation. Evaluation, benchmarking,
+and reproduction of published results by for-profit entities in the course
+of academic collaboration (without product integration) remain permitted.
 
-REQUIRES a separate commercial license agreement with NanoAgentic AI.
+-------------------------------------------------------------------------------
+2. COMMERCIAL USE
+-------------------------------------------------------------------------------
 
-Patent Notice:
-The methods implemented in this Software, including but not limited to
-NC-SSM (Noise-Conditioned Selective State Space Model), NC-OPAL (On-device
-Prototype Adaptive Learning), and the NC front-end architecture, are the
-subject of patent applications filed in the Republic of Korea and the
-United States of America. Commercial use without a license may constitute
-patent infringement.
+ANY COMMERCIAL USE of the Software, in whole or in part, including but not
+limited to:
 
-For commercial licensing inquiries:
-  Email: jhchoi@nanoagentic.ai
-  Web:   https://nanoagentic.ai
+    - incorporation into a commercial product, service, or SaaS offering,
+    - use in internal business operations of a for-profit entity,
+    - defense, aerospace, or industrial deployment,
+    - training data generation for commercial models,
+    - hardware (ASIC/FPGA/MCU) implementations sold or licensed to
+      third parties,
+    - redistribution as part of a commercial software bundle,
+
+REQUIRES A SEPARATE COMMERCIAL LICENSE from the copyright holder.
+
+"Commercial use" explicitly includes the commercialization of academic
+research outputs: if a project originally carried out under the Academic
+License later enters a commercialization path (spin-off, licensing,
+product development, revenue-generating deployment), a Commercial License
+must be obtained BEFORE such activity begins.
+
+To request a commercial license, contact:
+
+    Dr. Jin Ho Choi — SmartEAR / NanoAgentic AI
+    Email:   jinhochoi@smartear.co.kr
+    Subject: [NC-KWS-FineTuning Commercial License] <your organization>
+
+See COMMERCIAL_LICENSE.md for commercial licensing terms, tiers, and
+pricing framework.
+
+-------------------------------------------------------------------------------
+3. PATENT NOTICE
+-------------------------------------------------------------------------------
+
+Technologies embodied in this Software may be subject to pending patent
+applications in the Republic of Korea and the United States (NanoMamba /
+NC-SSM / NC-Conv-SSM family, and COP-RFS tracking framework). The Academic
+License does not grant any patent rights for commercial exploitation.
+Commercial patent rights are granted only through a Commercial License
+executed with the copyright holder.
+
+-------------------------------------------------------------------------------
+4. DISCLAIMER
+-------------------------------------------------------------------------------
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
